@@ -15,10 +15,11 @@ interface ChatResponse {
   pendingCount: number;
 }
 
+const THINKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 export async function handleMessageCreate(message: any) {
   const channelId = message.channelId;
 
-  // Check if there's an active session in this channel
   let session: ChatSession | null = null;
   try {
     session = await apiGet<ChatSession | null>(`/chat/${channelId}`);
@@ -27,12 +28,29 @@ export async function handleMessageCreate(message: any) {
   }
 
   if (!session) return;
-
-  // Only respond to the user who started the session
   if (session.discordId !== message.author.id) return;
 
-  // Show typing indicator
-  await message.channel.sendTyping();
+  // Send initial "thinking" message — no ping, just channel send
+  const thinkingEmbed = new EmbedBuilder()
+    .setColor(0xffffff)
+    .setDescription(`${THINKING_FRAMES[0]}  Nano is thinking...`);
+
+  const thinkingMsg = await message.channel.send({ embeds: [thinkingEmbed] });
+
+  // Animate the thinking message while the API call runs
+  let frameIndex = 1;
+  const animInterval = setInterval(async () => {
+    try {
+      const frame = THINKING_FRAMES[frameIndex % THINKING_FRAMES.length];
+      frameIndex++;
+      const animEmbed = new EmbedBuilder()
+        .setColor(0xffffff)
+        .setDescription(`${frame}  Nano is thinking...`);
+      await thinkingMsg.edit({ embeds: [animEmbed] });
+    } catch {
+      // Ignore edit errors during animation
+    }
+  }, 600);
 
   try {
     const result = await apiPost<ChatResponse>("/chat/message", {
@@ -40,24 +58,25 @@ export async function handleMessageCreate(message: any) {
       userMessage: message.content,
     });
 
+    clearInterval(animInterval);
+
     // Strip json code blocks for display
     let displayReply = result.reply;
     const jsonMatch = displayReply.match(/```json[\s\S]*?```/);
     if (jsonMatch) {
       displayReply = displayReply.replace(jsonMatch[0], "").trim();
       if (!displayReply) {
-        displayReply = result.summary || "I've prepared code changes for you.";
+        displayReply = result.summary || "Changes have been staged.";
       }
     }
 
-    // Truncate if needed for Discord's 4096 char embed limit
     if (displayReply.length > 3900) {
       displayReply = displayReply.slice(0, 3900) + "\n\n*[Response truncated — use /update to apply changes]*";
     }
 
     if (result.fileChanges && result.fileChanges.length > 0) {
-      // Code changes — send rich embed
-      const embed = new EmbedBuilder()
+      // Code changes — edit thinking msg into rich result embed
+      const finalEmbed = new EmbedBuilder()
         .setColor(0xffffff)
         .setDescription(displayReply || result.summary)
         .addFields(
@@ -80,19 +99,21 @@ export async function handleMessageCreate(message: any) {
           .setDisabled(true)
       );
 
-      await message.reply({ embeds: [embed], components: [row] });
+      await thinkingMsg.edit({ embeds: [finalEmbed], components: [row] });
     } else {
-      // Plain conversation — simple embed
-      const embed = new EmbedBuilder()
+      // Plain conversation — edit thinking msg into simple embed
+      const finalEmbed = new EmbedBuilder()
         .setColor(0xffffff)
         .setDescription(displayReply);
 
-      await message.reply({ embeds: [embed] });
+      await thinkingMsg.edit({ embeds: [finalEmbed] });
     }
   } catch (err) {
+    clearInterval(animInterval);
     console.error("Message handler error:", err);
-    await message.reply({
-      content: "Something went wrong. Please try again or use `/end` to restart the session.",
-    });
+    const errEmbed = new EmbedBuilder()
+      .setColor(0xffffff)
+      .setDescription("Something went wrong. Please try again or use `/end` to restart the session.");
+    await thinkingMsg.edit({ embeds: [errEmbed] });
   }
 }
