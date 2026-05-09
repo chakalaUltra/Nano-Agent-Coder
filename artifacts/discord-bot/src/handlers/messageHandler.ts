@@ -120,12 +120,20 @@ export async function handleMessageCreate(message: any) {
 
       await thinkingMsg.edit({ embeds: [finalEmbed] });
     }
-  } catch (err) {
+  } catch (err: any) {
     clearInterval(animInterval);
     console.error("Message handler error:", err);
+    let description = "Something went wrong. Please try again or use `/end` to restart the session.";
+    try {
+      const body = await err?.response?.json?.();
+      if (body?.error) description = body.error;
+    } catch {}
+    if (err?.message?.includes("429")) {
+      description = "Nano has hit the AI rate limit. Please wait a few minutes and try again.";
+    }
     const errEmbed = new EmbedBuilder()
       .setColor(0xffffff)
-      .setDescription("Something went wrong. Please try again or use `/end` to restart the session.");
+      .setDescription(description);
     await thinkingMsg.edit({ embeds: [errEmbed] });
   }
 }

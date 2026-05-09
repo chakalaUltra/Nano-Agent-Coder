@@ -257,9 +257,15 @@ router.post("/chat/message", async (req, res) => {
       summary,
       pendingCount: Object.keys(pendingFiles).length,
     });
-  } catch (err) {
+  } catch (err: any) {
     logger.error(err, "Groq API error");
-    res.status(500).json({ error: "AI service error" });
+    if (err?.status === 429) {
+      const match = err?.message?.match(/Please try again in ([^.]+\.)/);
+      const retryIn = match ? match[1] : "a few minutes";
+      res.status(429).json({ error: `Rate limit reached. Please try again in ${retryIn}` });
+    } else {
+      res.status(500).json({ error: "AI service error" });
+    }
   }
 });
 
