@@ -103,15 +103,90 @@ router.post("/chat/message", async (req, res) => {
   if (user?.githubAccessToken) {
     try {
       const [owner, repo] = session.repoFullName.split("/");
-      const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, {
-        headers: { Authorization: `Bearer ${user.githubAccessToken}`, "User-Agent": "NanoAgent" },
-      });
+      const headers = { Authorization: `Bearer ${user.githubAccessToken}`, "User-Agent": "NanoAgent" };
+
+      const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`, { headers });
       if (treeRes.ok) {
-        const tree = await treeRes.json() as { tree: Array<{ path: string; type: string }> };
-        const files = tree.tree.filter(f => f.type === "blob").map(f => f.path).slice(0, 200);
-        repoContext = `\nRepository: ${session.repoFullName}\nFiles in repo:\n${files.join("\n")}`;
+        const tree = await treeRes.json() as { tree: Array<{ path: string; type: string; size?: number }> };
+
+        const TEXT_EXTENSIONS = new Set([
+          ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+          ".json", ".jsonc", ".json5",
+          ".md", ".mdx", ".txt", ".csv",
+          ".css", ".scss", ".sass", ".less",
+          ".html", ".htm", ".xml", ".svg",
+          ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+          ".sh", ".bash", ".zsh", ".fish",
+          ".yaml", ".yml", ".toml", ".ini", ".env", ".env.example",
+          ".gitignore", ".gitattributes", ".editorconfig", ".prettierrc",
+          ".eslintrc", ".babelrc", ".nvmrc",
+        ]);
+
+        const allFiles = tree.tree.filter(f => f.type === "blob").map(f => f.path);
+
+        // Separate text files (fetchable) from others
+        const textFiles = allFiles.filter(p => {
+          const ext = "." + p.split(".").pop()!.toLowerCase();
+          const basename = p.split("/").pop()!;
+          return TEXT_EXTENSIONS.has(ext) || TEXT_EXTENSIONS.has(basename);
+        });
+        const otherFiles = allFiles.filter(p => !textFiles.includes(p));
+
+        // Fetch up to 40 text files in parallel batches of 8
+        const filesToFetch = textFiles.slice(0, 40);
+        const fetchedContents: Array<{ path: string; content: string }> = [];
+        let totalChars = 0;
+        const MAX_TOTAL_CHARS = 60000;
+        const MAX_FILE_CHARS = 4000;
+
+        for (let i = 0; i < filesToFetch.length; i += 8) {
+          const batch = filesToFetch.slice(i, i + 8);
+          const results = await Promise.all(
+            batch.map(async (filePath) => {
+              try {
+                const res = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+                  { headers }
+                );
+                if (!res.ok) return null;
+                const data = await res.json() as { content?: string; encoding?: string };
+                if (!data.content || data.encoding !== "base64") return null;
+                const raw = Buffer.from(data.content.replace(/\n/g, ""), "base64").toString("utf-8");
+                return { path: filePath, content: raw.slice(0, MAX_FILE_CHARS) };
+              } catch {
+                return null;
+              }
+            })
+          );
+          for (const r of results) {
+            if (!r) continue;
+            if (totalChars + r.content.length > MAX_TOTAL_CHARS) break;
+            fetchedContents.push(r);
+            totalChars += r.content.length;
+          }
+          if (totalChars >= MAX_TOTAL_CHARS) break;
+        }
+
+        // Build context: file tree + full file contents
+        const treeLines = allFiles.slice(0, 200);
+        let ctx = `\nRepository: ${session.repoFullName}\n\nFile tree:\n${treeLines.join("\n")}`;
+
+        if (fetchedContents.length > 0) {
+          ctx += "\n\nFile contents:\n";
+          for (const f of fetchedContents) {
+            ctx += `\n// ${f.path}\n${f.content}\n`;
+          }
+        }
+
+        if (otherFiles.length > 0 && fetchedContents.length < textFiles.length) {
+          ctx += `\n\n(${textFiles.length - fetchedContents.length} additional files not shown due to size limits)`;
+        }
+
+        repoContext = ctx;
       }
-    } catch {}
+    } catch (err) {
+      logger.error(err, "Failed to fetch repo context");
+    }
   }
 
   const history: Array<{ role: string; content: string }> = JSON.parse(session.history);
