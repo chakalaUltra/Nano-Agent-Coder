@@ -11,6 +11,7 @@ interface ChatSession {
 interface ChatResponse {
   reply: string;
   fileChanges: Array<{ path: string; content: string; message: string }>;
+  fileDeletions: Array<{ path: string; message: string }>;
   summary: string;
   pendingCount: number;
 }
@@ -37,7 +38,7 @@ export async function handleMessageCreate(message: any) {
 
   const thinkingMsg = await message.channel.send({ embeds: [thinkingEmbed] });
 
-  // Animate the thinking message while the API call runs
+  // Animate while the API call runs
   let frameIndex = 1;
   const animInterval = setInterval(async () => {
     try {
@@ -47,9 +48,7 @@ export async function handleMessageCreate(message: any) {
         .setColor(0xffffff)
         .setDescription(`${frame}  Nano is thinking...`);
       await thinkingMsg.edit({ embeds: [animEmbed] });
-    } catch {
-      // Ignore edit errors during animation
-    }
+    } catch {}
   }, 600);
 
   try {
@@ -62,33 +61,47 @@ export async function handleMessageCreate(message: any) {
 
     // Strip json code blocks for display
     let displayReply = result.reply;
-    const jsonMatch = displayReply.match(/```json[\s\S]*?```/);
-    if (jsonMatch) {
-      displayReply = displayReply.replace(jsonMatch[0], "").trim();
-      if (!displayReply) {
-        displayReply = result.summary || "Changes have been staged.";
-      }
+    const jsonBlocks = [...displayReply.matchAll(/```json[\s\S]*?```/g)];
+    for (const block of jsonBlocks) {
+      displayReply = displayReply.replace(block[0], "").trim();
+    }
+    if (!displayReply) {
+      displayReply = result.summary || "Changes have been staged.";
     }
 
     if (displayReply.length > 3900) {
       displayReply = displayReply.slice(0, 3900) + "\n\n*[Response truncated — use /update to apply changes]*";
     }
 
-    if (result.fileChanges && result.fileChanges.length > 0) {
-      // Code changes — edit thinking msg into rich result embed
+    const hasChanges = (result.fileChanges?.length ?? 0) > 0;
+    const hasDeletions = (result.fileDeletions?.length ?? 0) > 0;
+
+    if (hasChanges || hasDeletions) {
+      const fields = [];
+
+      if (hasChanges) {
+        fields.push({
+          name: `${result.fileChanges.length} file(s) to update`,
+          value: result.fileChanges.map(f => `\`${f.path}\``).join("\n"),
+        });
+      }
+
+      if (hasDeletions) {
+        fields.push({
+          name: `${result.fileDeletions.length} file(s) to delete`,
+          value: result.fileDeletions.map(f => `~~\`${f.path}\`~~`).join("\n"),
+        });
+      }
+
+      fields.push({
+        name: "Pending changes",
+        value: `${result.pendingCount} total — use \`/update\` to push to GitHub`,
+      });
+
       const finalEmbed = new EmbedBuilder()
         .setColor(0xffffff)
-        .setDescription(displayReply || result.summary)
-        .addFields(
-          {
-            name: `${result.fileChanges.length} file(s) staged`,
-            value: result.fileChanges.map((f) => `\`${f.path}\``).join("\n"),
-          },
-          {
-            name: "Pending changes",
-            value: `${result.pendingCount} file(s) total — use \`/update\` to push to GitHub`,
-          }
-        )
+        .setDescription(displayReply)
+        .addFields(fields)
         .setFooter({ text: "Nano Agent • /update to apply • /rollbacks to restore" });
 
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -101,7 +114,6 @@ export async function handleMessageCreate(message: any) {
 
       await thinkingMsg.edit({ embeds: [finalEmbed], components: [row] });
     } else {
-      // Plain conversation — edit thinking msg into simple embed
       const finalEmbed = new EmbedBuilder()
         .setColor(0xffffff)
         .setDescription(displayReply);
