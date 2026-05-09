@@ -1,0 +1,25 @@
+{
+  "name": "@workspace/discord-bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-vm-modules --loader ts-node/esm src/index.ts",
+    "start": "node dist/index.mjs",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "register": "node --loader ts-node/esm src/register.ts"
+  },
+  "dependencies": {
+    "@workspace/db": "workspace:*",
+    "discord.js": "^14.26.4",
+    "groq-sdk": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "esbuild": "^0.27.3",
+    "ts-node": "^10.9.2",
+    "tsx": "catalog:",
+    "typescript": "~5.9.2"
+  }
+}
