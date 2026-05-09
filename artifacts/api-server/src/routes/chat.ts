@@ -5,7 +5,14 @@ import Groq from "groq-sdk";
 import { logger } from "../lib/logger";
 
 const router = Router();
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+let _groq: Groq | null = null;
+function getGroq(): Groq {
+  if (!_groq) {
+    if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY environment variable is required");
+    _groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  }
+  return _groq;
+}
 
 const DELETE_SENTINEL = "__DELETE__";
 
@@ -198,7 +205,7 @@ router.post("/chat/message", async (req, res) => {
   ];
 
   try {
-    const completion = await groq.chat.completions.create({
+    const completion = await getGroq().chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages,
       max_tokens: 4096,
