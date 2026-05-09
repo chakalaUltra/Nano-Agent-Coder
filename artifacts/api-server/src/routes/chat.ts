@@ -42,6 +42,17 @@ When the user asks you to delete one or more files, respond with a JSON block in
 
 You can also combine updates and deletions in a single response by using both blocks.
 
+When the user asks to see their files, project structure, or directory layout, respond with a formatted tree using a code block like this:
+\`\`\`
+project/
+├── src/
+│   ├── index.ts
+│   └── utils.ts
+├── package.json
+└── README.md
+\`\`\`
+Build the tree from the file list provided in your context. Group files under their parent directories. Use ├── for items and └── for the last item in each group. Do not use any JSON action block for this — just the plain code block tree.
+
 When you want to just chat or explain (no file changes), respond normally in plain text.
 
 Rules:
@@ -97,8 +108,8 @@ router.post("/chat/message", async (req, res) => {
       });
       if (treeRes.ok) {
         const tree = await treeRes.json() as { tree: Array<{ path: string; type: string }> };
-        const files = tree.tree.filter(f => f.type === "blob").map(f => f.path).slice(0, 50);
-        repoContext = `\nRepository: ${session.repoFullName}\nFiles:\n${files.join("\n")}`;
+        const files = tree.tree.filter(f => f.type === "blob").map(f => f.path).slice(0, 200);
+        repoContext = `\nRepository: ${session.repoFullName}\nFiles in repo:\n${files.join("\n")}`;
       }
     } catch {}
   }
