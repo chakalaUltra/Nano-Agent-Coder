@@ -5,11 +5,12 @@ import { start } from "./commands/start.js";
 import { update } from "./commands/update.js";
 import { end } from "./commands/end.js";
 import { rollbacks } from "./commands/rollbacks.js";
+import { help } from "./commands/help.js";
 
 const token = process.env.DISCORD_BOT_TOKEN!;
 const clientId = process.env.DISCORD_CLIENT_ID!;
 
-const commands = [connectAccount, profileStatus, start, update, end, rollbacks].map(
+const commands = [connectAccount, profileStatus, start, update, end, rollbacks, help].map(
   (cmd) => cmd.data.toJSON()
 );
 
