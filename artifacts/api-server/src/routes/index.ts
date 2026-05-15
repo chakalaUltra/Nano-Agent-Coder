@@ -4,6 +4,7 @@ import authRouter from "./auth";
 import reposRouter from "./repos";
 import rollbacksRouter from "./rollbacks";
 import chatRouter from "./chat";
+import runRouter from "./run";
 
 const router: IRouter = Router();
 
@@ -12,5 +13,6 @@ router.use(authRouter);
 router.use(reposRouter);
 router.use(rollbacksRouter);
 router.use(chatRouter);
+router.use(runRouter);
 
 export default router;

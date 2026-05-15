@@ -6,6 +6,8 @@ import { update } from "./commands/update.js";
 import { end } from "./commands/end.js";
 import { rollbacks } from "./commands/rollbacks.js";
 import { help } from "./commands/help.js";
+import { runProject } from "./commands/runProject.js";
+import { consoleCmd } from "./commands/consoleCmd.js";
 import { handleMessageCreate } from "./handlers/messageHandler.js";
 import { handleInteraction } from "./handlers/interactionHandler.js";
 
@@ -21,7 +23,7 @@ const client = new Client({
 });
 
 const commands = new Collection<string, any>();
-const commandList = [connectAccount, profileStatus, start, update, end, rollbacks, help];
+const commandList = [connectAccount, profileStatus, start, update, end, rollbacks, help, runProject, consoleCmd];
 for (const cmd of commandList) {
   commands.set(cmd.data.name, cmd);
 }
