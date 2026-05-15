@@ -16,13 +16,27 @@ interface ChatResponse {
   pendingCount: number;
 }
 
-const THINKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const THINKING_LABELS = [
-  "Reading your message...",
-  "Thinking...",
-  "Checking the repo...",
-  "Working on it...",
-  "Almost there...",
+// Spinner frames for the loading indicator
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+// Inner monologue phrases shown as italic text during the thinking animation
+const THINKING_MONOLOGUE: string[] = [
+  "Reading your message carefully...",
+  "Let me understand what you're actually asking for here...",
+  "Pulling in the repo context to see what we're working with...",
+  "Scanning the file structure to understand the current state...",
+  "Identifying which files are relevant to this change...",
+  "Thinking through the best approach before writing anything...",
+  "Considering the architecture — what fits, what doesn't...",
+  "Checking for any dependencies or patterns I need to follow...",
+  "Planning the file structure for this...",
+  "Thinking about edge cases and where things could go wrong...",
+  "Drafting the implementation in my head first...",
+  "Making sure I'm not missing anything before I write the code...",
+  "Writing the code now — doing it properly this time...",
+  "Reviewing what I've written before I send it...",
+  "Almost done, just double-checking the logic...",
+  "Putting the final touches on this...",
 ];
 
 function chunkText(text: string, maxLen = 3900): string[] {
@@ -55,29 +69,36 @@ export async function handleMessageCreate(message: any) {
   if (!session) return;
   if (session.discordId !== message.author.id) return;
 
+  // Show the initial thinking state immediately
   const thinkingEmbed = new EmbedBuilder()
-    .setColor(0xffffff)
-    .setDescription(`${THINKING_FRAMES[0]}  ${THINKING_LABELS[0]}`);
+    .setColor(0x1a1a1a)
+    .setDescription(`${SPINNER_FRAMES[0]}  *${THINKING_MONOLOGUE[0]}*`);
 
   const thinkingMsg = await message.channel.send({ embeds: [thinkingEmbed] });
 
   let frameIndex = 1;
-  let labelIndex = 0;
-  let labelTick = 0;
+  let phraseIndex = 0;
+  let tickCount = 0;
+
+  // Advance the spinner every 500ms; advance the inner monologue phrase every ~3.5 seconds
   const animInterval = setInterval(async () => {
     try {
-      const frame = THINKING_FRAMES[frameIndex % THINKING_FRAMES.length];
+      const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length];
       frameIndex++;
-      labelTick++;
-      if (labelTick % 5 === 0) {
-        labelIndex = (labelIndex + 1) % THINKING_LABELS.length;
+      tickCount++;
+
+      // Rotate to the next monologue phrase every 7 ticks (~3.5 seconds)
+      if (tickCount % 7 === 0) {
+        phraseIndex = (phraseIndex + 1) % THINKING_MONOLOGUE.length;
       }
+
       const animEmbed = new EmbedBuilder()
-        .setColor(0xffffff)
-        .setDescription(`${frame}  ${THINKING_LABELS[labelIndex]}`);
+        .setColor(0x1a1a1a)
+        .setDescription(`${frame}  *${THINKING_MONOLOGUE[phraseIndex]}*`);
+
       await thinkingMsg.edit({ embeds: [animEmbed] });
     } catch {}
-  }, 600);
+  }, 500);
 
   try {
     const result = await apiPost<ChatResponse>("/chat/message", {
@@ -87,7 +108,7 @@ export async function handleMessageCreate(message: any) {
 
     clearInterval(animInterval);
 
-    // Strip json code blocks from display text
+    // Strip json code blocks from the display text — they're already parsed server-side
     let displayReply = result.reply;
     const jsonBlocks = [...displayReply.matchAll(/```json[\s\S]*?```/g)];
     for (const block of jsonBlocks) {
@@ -101,7 +122,7 @@ export async function handleMessageCreate(message: any) {
     const hasDeletions = (result.fileDeletions?.length ?? 0) > 0;
     const hasFileActivity = hasChanges || hasDeletions;
 
-    // --- Message 1: the conversational reply (edit the thinking message) ---
+    // Message 1: the conversational reply (replace the thinking message)
     const chunks = chunkText(displayReply);
 
     const firstEmbed = new EmbedBuilder()
@@ -118,7 +139,7 @@ export async function handleMessageCreate(message: any) {
       await message.channel.send({ embeds: [overflowEmbed] });
     }
 
-    // --- Message 2: staged file changes (separate message if applicable) ---
+    // Message 2: staged file changes (separate embed if there are any)
     if (hasFileActivity) {
       const fields = [];
 
@@ -145,7 +166,7 @@ export async function handleMessageCreate(message: any) {
         .setColor(0xffffff)
         .setTitle("Staged Changes")
         .addFields(fields)
-        .setFooter({ text: "Nano Agent • /update to apply • /rollbacks to restore" });
+        .setFooter({ text: "Nano Agent  •  /update to apply  •  /rollbacks to restore a previous version" });
 
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -160,17 +181,21 @@ export async function handleMessageCreate(message: any) {
   } catch (err: any) {
     clearInterval(animInterval);
     console.error("Message handler error:", err);
+
     let description = "Something went wrong. Please try again or use `/end` to restart the session.";
     try {
       const body = await err?.response?.json?.();
       if (body?.error) description = body.error;
     } catch {}
+
     if (err?.message?.includes("429")) {
       description = "Nano has hit the AI rate limit. Please wait a few minutes and try again.";
     }
+
     const errEmbed = new EmbedBuilder()
-      .setColor(0xffffff)
+      .setColor(0xff4444)
       .setDescription(description);
+
     await thinkingMsg.edit({ embeds: [errEmbed] });
   }
 }
