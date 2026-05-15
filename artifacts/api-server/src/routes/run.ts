@@ -139,8 +139,18 @@ function installCommand(projectType: string, files: string[]): string {
 router.post("/run/prepare", async (req, res) => {
   const { channelId } = req.body as { channelId: string };
 
+  logger.info({ channelId }, "run/prepare called");
+
+  if (!channelId) {
+    res.status(400).json({ error: "channelId is required" });
+    return;
+  }
+
   const [session] = await db.select().from(chatSessionsTable).where(eq(chatSessionsTable.channelId, channelId)).limit(1);
-  if (!session) { res.status(404).json({ error: "No active session" }); return; }
+
+  logger.info({ channelId, found: !!session }, "run/prepare session lookup");
+
+  if (!session) { res.status(404).json({ error: "No active session — use /start first to pick a repository" }); return; }
 
   const existing = runManager.getSession(channelId);
   if (existing && existing.status !== "stopped") {
