@@ -252,7 +252,7 @@ router.post("/run/start", async (req, res) => {
 });
 
 // GET /run/console/:channelId
-// Returns the current console output and session status.
+// Returns the current console output, status, and any fix/error events.
 router.get("/run/console/:channelId", (req, res) => {
   const { channelId } = req.params;
   const session = runManager.getSession(channelId);
@@ -266,6 +266,7 @@ router.get("/run/console/:channelId", (req, res) => {
     url: session.url,
     port: session.port,
     autoFixAttempts: session.autoFixAttempts,
+    events: session.events,
   });
 });
 

@@ -10,17 +10,12 @@ import {
 } from "discord.js";
 import { apiPost, apiGet } from "../lib/api.js";
 import { showConsoleEmbed } from "../commands/runProject.js";
+import { startPoller, buildConsoleEmbed, stopPoller } from "../lib/runPoller.js";
 
 interface RollbackResult {
   success: boolean;
   commitSha?: string;
   label?: string;
-}
-
-interface ChatSession {
-  repoFullName: string;
-  discordId: string;
-  channelId: string;
 }
 
 interface CreateRepoResult {
@@ -41,6 +36,8 @@ interface ConsoleResult {
   status: string;
   url: string;
   port: number;
+  autoFixAttempts: number;
+  events: Array<{ type: string; message: string; at: string }>;
 }
 
 export async function handleInteraction(interaction: any, commands: Collection<string, any>) {
@@ -52,7 +49,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
       await command.execute(interaction);
     } catch (err) {
       console.error("Command error:", err);
-      const reply = { content: "An error occurred running this command.", ephemeral: true };
+      const reply = { content: "An error occurred running this command.", flags: 1 << 6 };
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(reply);
       } else {
@@ -77,7 +74,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
         .setColor(0xffffff)
         .setTitle(`Session Started — ${repoFullName}`)
         .setDescription(
-          `Nano is ready. Send a message in this channel to start coding.\n\nYou can ask Nano to write new files, fix bugs, refactor code, or build new features from scratch.`
+          `Nano is ready. Send a message in this channel to start coding.\n\nAsk Nano to write files, fix bugs, refactor, or build features from scratch.`
         )
         .addFields(
           { name: "Repository", value: `\`${repoFullName}\``, inline: true },
@@ -122,7 +119,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
   if (interaction.isButton() && interaction.customId.startsWith("rollback_apply_")) {
     const rollbackId = interaction.customId.replace("rollback_apply_", "");
     const discordId = interaction.user.id;
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 1 << 6 });
 
     try {
       const result = await apiPost<RollbackResult>(`/rollbacks/${rollbackId}/apply`, { discordId });
@@ -144,30 +141,30 @@ export async function handleInteraction(interaction: any, commands: Collection<s
       .setCustomId("create_repo_modal")
       .setTitle("Create New Repository");
 
-    const nameInput = new TextInputBuilder()
-      .setCustomId("repo_name")
-      .setLabel("Repository Name")
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("my-awesome-project")
-      .setRequired(true);
-
-    const visibilityInput = new TextInputBuilder()
-      .setCustomId("repo_visibility")
-      .setLabel('Visibility (type "private" or "public")')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("public")
-      .setRequired(true);
-
-    const descInput = new TextInputBuilder()
-      .setCustomId("repo_description")
-      .setLabel("Description (optional)")
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(false);
-
     modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(visibilityInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(descInput),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("repo_name")
+          .setLabel("Repository Name")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("my-awesome-project")
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("repo_visibility")
+          .setLabel('Visibility (type "private" or "public")')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("public")
+          .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("repo_description")
+          .setLabel("Description (optional)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+      ),
     );
 
     await interaction.showModal(modal);
@@ -176,7 +173,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
 
   // ── Modal submit — create repo ──────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === "create_repo_modal") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 1 << 6 });
     const discordId = interaction.user.id;
     const name = interaction.fields.getTextInputValue("repo_name").trim();
     const visibility = interaction.fields.getTextInputValue("repo_visibility").trim().toLowerCase();
@@ -211,94 +208,70 @@ export async function handleInteraction(interaction: any, commands: Collection<s
   // ── Run project: env vars modal submit ─────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId.startsWith("run_env_modal_")) {
     const encoded = interaction.customId.replace("run_env_modal_", "");
-    let channelId = interaction.channelId;
+    let channelId = interaction.channelId as string;
     let projectType = "Node.js";
-    let runCommand = "npm start";
 
     try {
       const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString());
       channelId = decoded.channelId ?? channelId;
       projectType = decoded.projectType ?? projectType;
-      runCommand = decoded.runCommand ?? runCommand;
     } catch {}
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 1 << 6 });
 
-    // Collect all env vars from the modal fields
+    // Collect env vars from modal fields
     const envVars: Record<string, string> = {};
     for (const row of interaction.fields.components ?? []) {
-      for (const component of row.components ?? []) {
-        const key = component.customId?.replace("env_", "");
-        if (key && component.value) {
-          envVars[key] = component.value;
-        }
+      for (const component of (row as any).components ?? []) {
+        const key = (component.customId as string)?.replace("env_", "");
+        if (key && component.value) envVars[key] = component.value;
       }
     }
 
-    const startEmbed = new EmbedBuilder()
-      .setColor(0x1a1a1a)
+    const startingEmbed = new EmbedBuilder()
+      .setColor(0xffffff)
       .setTitle("Starting Project")
-      .setDescription(`*Cloning the repository and installing dependencies...*\n\nThis usually takes 15–60 seconds.`)
-      .addFields({ name: "Project Type", value: projectType, inline: true });
+      .setDescription(`Cloning the repository and installing dependencies...\n\nThis usually takes 15–60 seconds.`)
+      .addFields({ name: "Project Type", value: projectType, inline: true })
+      .setFooter({ text: "Live console will appear shortly" });
 
-    await interaction.editReply({ embeds: [startEmbed] });
+    await interaction.editReply({ embeds: [startingEmbed] });
 
     try {
       const result = await apiPost<StartResult>("/run/start", { channelId, envVars });
-      await showConsoleEmbed(interaction, channelId, result.url, result.port);
-    } catch (err: any) {
+      await showConsoleEmbed(interaction, channelId, result.url);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "unknown error";
       const errEmbed = new EmbedBuilder()
         .setColor(0xff4444)
         .setTitle("Failed to Start")
-        .setDescription(err?.message ?? "Something went wrong starting the project.");
+        .setDescription(msg);
       await interaction.editReply({ embeds: [errEmbed] });
     }
     return;
   }
 
-  // ── Run: refresh console button ─────────────────────────────────────────────
+  // ── Run: force refresh button ───────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith("run_refresh_")) {
     const channelId = interaction.customId.replace("run_refresh_", "");
     await interaction.deferUpdate();
 
     try {
       const data = await apiGet<ConsoleResult>(`/run/console/${channelId}`);
-      const logsText = data.logs.slice(-25).join("\n") || "*No output yet...*";
-      const safeLog = logsText.length > 3800 ? "..." + logsText.slice(-3800) : logsText;
-
-      const statusLabel: Record<string, string> = {
-        running: "Running",
-        cloning: "Cloning repository...",
-        installing: "Installing dependencies...",
-        error: "Error — Nano is auto-fixing",
-        fixing: "Auto-fixing in progress...",
-        stopped: "Stopped",
-      };
-
-      const embed = new EmbedBuilder()
-        .setColor(0xffffff)
-        .setTitle("Project Console")
-        .setDescription("```\n" + safeLog + "\n```")
-        .addFields(
-          { name: "Status", value: statusLabel[data.status] ?? data.status, inline: true },
-          { name: "URL", value: data.url || "—", inline: true },
-        )
-        .setFooter({ text: "Nano Agent  •  Auto-fixes errors  •  Click Refresh to update" });
-
+      const embed = buildConsoleEmbed(data);
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`run_refresh_${channelId}`)
-          .setLabel("Refresh Console")
+          .setLabel("Force Refresh")
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`run_stop_${channelId}`)
           .setLabel("Stop Project")
           .setStyle(ButtonStyle.Danger),
       );
-
       await interaction.editReply({ embeds: [embed], components: [row] });
     } catch {
-      await interaction.followUp({ content: "Could not fetch console output — the project may not be running.", ephemeral: true });
+      await interaction.followUp({ content: "Could not fetch console — the project may not be running.", flags: 1 << 6 });
     }
     return;
   }
@@ -309,6 +282,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
     await interaction.deferUpdate();
 
     try {
+      stopPoller(channelId);
       await apiPost("/run/stop", { channelId });
 
       const embed = new EmbedBuilder()
@@ -319,7 +293,7 @@ export async function handleInteraction(interaction: any, commands: Collection<s
 
       await interaction.editReply({ embeds: [embed], components: [] });
     } catch {
-      await interaction.followUp({ content: "Failed to stop the project.", ephemeral: true });
+      await interaction.followUp({ content: "Failed to stop the project.", flags: 1 << 6 });
     }
     return;
   }
